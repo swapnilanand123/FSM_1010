@@ -1,0 +1,301 @@
+`include "uvm_macros.svh"
+import uvm_pkg::*;
+
+// Define a UVM configuration class
+class config_mealy1010 extends uvm_object;
+  `uvm_object_utils(  config_mealy1010 )
+  uvm_active_passive_enum agent_type = UVM_ACTIVE;
+
+function new(input string path = " config_mealy1010 ");
+    super.new(path);
+   endfunction 
+  
+endclass
+
+// Define a UVM sequence item to model your data
+class transaction extends uvm_sequence_item;
+  `uvm_object_utils(transaction)
+  
+ rand bit rst;
+ rand bit data_in;
+  bit data_out;
+  
+  function new(string path = "transaction");
+    super.new(path);
+  endfunction
+endclass
+
+// Define a UVM sequence to generate and send transactions
+class valid_data_in extends uvm_sequence#(transaction);
+  `uvm_object_utils( valid_data_in )
+  
+  transaction tr;
+  
+  function new(input string path = " valid_data_in ");
+    super.new(path);
+  endfunction
+  
+  virtual task body();
+    repeat(15) begin
+      tr = transaction::type_id::create("tr");
+      start_item(tr);
+      assert(tr.randomize());
+      tr.rst = 1'b0; // Modify as needed
+ `uvm_info("SEQ", $sformatf("rst : %0b  data_in : %0b  data_out : %0b", tr.rst, tr.data_in, tr.data_out), UVM_NONE);
+      
+finish_item(tr);
+    end
+  endtask
+endclass
+
+class rst_mealy1010 extends uvm_sequence#(transaction);
+  `uvm_object_utils( rst_mealy1010 )
+  
+  transaction tr;
+  
+  function new(input string path = " rst_mealy1010 ");
+    super.new(path);
+  endfunction
+  
+  virtual task body();
+    repeat(15) begin
+      tr = transaction::type_id::create("tr");
+      start_item(tr);
+      assert(tr.randomize());
+      tr.rst = 1'b1; // Modify as needed
+ `uvm_info("SEQ", $sformatf("rst : %0b  data_in : %0b  data_out : %0b", tr.rst, tr.data_in, tr.data_out), UVM_NONE);
+      
+finish_item(tr);
+    end
+  endtask
+endclass
+
+// Define a UVM driver to drive transactions to the DUT
+class drv extends uvm_driver#(transaction);
+  `uvm_component_utils( drv)
+  
+  transaction tr;
+  virtual mealy1010_if fif;
+  
+  function new(string path = "drv", uvm_component parent = null);
+    super.new(path, parent);
+  endfunction
+  
+  virtual function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    if (!uvm_config_db#(virtual mealy1010_if)::get(this, "", "fif", fif))
+      `uvm_error("drv", "Unable to access Interface");
+  endfunction
+  
+  virtual task run_phase(uvm_phase phase);
+    tr = transaction::type_id::create("tr");
+    forever begin
+      seq_item_port.get_next_item(tr);
+      // Map transaction fields to interface signals
+      fif.rst <= tr.rst;
+      fif.data_in <= tr.data_in;
+     `uvm_info("DRV", $sformatf("rst : %0b  data_in : %0b  data_out : %0b", tr.rst, tr.data_in, tr.data_out), UVM_NONE);
+      seq_item_port.item_done();
+      repeat(2) @(posedge fif.clk);
+    end
+  endtask
+endclass
+
+// Define a UVM monitor to monitor the DUT outputs
+class mon extends uvm_monitor;
+  `uvm_component_utils( mon )
+  
+  uvm_analysis_port#(transaction) send;
+  transaction tr;
+  virtual mealy1010_if fif;
+  
+  function new(string path = " mon ", uvm_component parent = null);
+    super.new(path, parent);
+  endfunction
+  
+  virtual function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    tr = transaction::type_id::create("tr");
+    send = new("send", this);
+    if (!uvm_config_db#(virtual mealy1010_if)::get(this, "", "fif", fif))
+      `uvm_error(" mon ", "Unable to access Interface");
+  endfunction
+  
+  virtual task run_phase(uvm_phase phase);
+    forever begin
+      repeat(2) @(posedge fif.clk);
+      // Map interface signals to transaction fields
+      tr.rst = fif.rst;
+      tr.data_in = fif.data_in;
+      tr.data_out = fif.data_out;
+
+  `uvm_info("MON", $sformatf("rst : %0b  data_in : %0b  data_out : %0b", tr.rst, tr.data_in, tr.data_out), UVM_NONE);
+     
+      send.write(tr);
+    end
+  endtask
+endclass
+
+// Define a UVM scoreboard to score the DUT outputs
+class sco extends uvm_scoreboard;
+  `uvm_component_utils( sco )
+  
+  uvm_analysis_imp#(transaction,  sco ) recv;
+  
+  //int num_transactions = 15;
+  //int transactions_received = 0;
+  
+  function new(input string inst = " sco ", uvm_component parent = null);
+    super.new(inst,parent);
+  endfunction
+  
+  virtual function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    recv = new("recv", this);
+  endfunction
+  
+  virtual function void write(transaction tr);
+    `uvm_info("SCO", $sformatf("rst : %0b  data_in : %0b  data_out : %0b", tr.rst, tr.data_in, tr.data_out), UVM_NONE);
+
+    // Check the received data against expected values and perform necessary checks.
+    if (tr.data_out == 1'b1) begin
+      $display("[SCO] : Successful Output");
+      if (tr.data_in == 2'b00) begin
+        $display("[SCO] : Start of the sequence");
+      end
+    end else if (tr.data_in == 2'b01) begin
+      $display("[SCO] : Still searching for the sequence");
+    end else if (tr.data_in == 2'b10) begin
+      $display("[SCO] : Still searching for the sequence");
+    end else begin
+      $display("[SCO] : Sequence detected");
+    end
+
+     $display("----------------------------------------------------------------");
+    endfunction
+endclass
+
+// Define a UVM agent
+class agent extends uvm_agent;
+  `uvm_component_utils(agent)
+  
+  function new(string path = "agent", uvm_component parent = null);
+    super.new(path, parent);
+  endfunction
+  
+  drv d;
+  uvm_sequencer#(transaction) sequencer;
+  mon m;
+  
+  // Define a UVM configuration object
+  config_mealy1010 cfg;
+  
+  virtual function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    m = mon::type_id::create("m", this);
+    cfg = config_mealy1010::type_id::create("cfg");
+    
+    if (!uvm_config_db#(config_mealy1010)::get(this, "", "cfg", cfg))
+      `uvm_error("agent", "Failed to access config");
+    
+    if (cfg.agent_type == UVM_ACTIVE) begin
+      d = drv::type_id::create("d", this);
+      sequencer = uvm_sequencer#(transaction)::type_id::create("sequencer", this);
+    end
+  endfunction
+
+virtual function void connect_phase(uvm_phase phase);
+super.connect_phase(phase);
+d.seq_item_port.connect(sequencer.seq_item_export);
+endfunction
+endclass
+
+// Define a UVM environment
+class env extends uvm_env;
+  `uvm_component_utils(env)
+  
+  function new(string path = "env", uvm_component parent = null);
+    super.new(path, parent);
+  endfunction
+  
+  agent a;
+  sco s;
+  config_mealy1010 cfg;
+  
+  virtual function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    a = agent::type_id::create("a", this);
+    s = sco::type_id::create("s", this);
+    cfg = config_mealy1010::type_id::create("cfg");
+    
+    uvm_config_db#( config_mealy1010 )::set(this, "a", "cfg", cfg);
+  endfunction
+
+virtual function void connect_phase(uvm_phase phase);
+super.connect_phase(phase);
+a.m.send.connect(s.recv);
+endfunction
+
+endclass
+
+// Define a UVM test
+class test extends uvm_test;
+  `uvm_component_utils(test)
+  
+  function new(input string inst = "test", uvm_component parent = null);
+    super.new(inst, parent);
+  endfunction
+  env e;
+valid_data_in    vdata_in;
+rst_mealy1010       rff;
+  
+  virtual function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    e = env::type_id::create("env", this);
+vdata_in = valid_data_in::type_id::create("vdata_in");
+  rff  = rst_mealy1010::type_id::create("rff");
+  endfunction
+  
+  virtual task run_phase(uvm_phase phase);
+    phase.raise_objection(this);
+  
+rff.start(e.a.sequencer);
+  #40;
+  vdata_in.start(e.a.sequencer);
+  #40;
+    phase.drop_objection(this);
+  endtask
+endclass
+
+// Define the top-level module for your design
+module tb;
+  mealy1010_if fif();
+
+  // Connect the interface signals to the DUT
+  mealy1010 dut (
+    .clk(fif.clk),
+    .rst(fif.rst),
+    .data_in(fif.data_in),
+    .data_out(fif.data_out)
+  );
+
+  initial begin
+    // Set the interface in the configuration database
+    uvm_config_db#(virtual mealy1010_if)::set(null, "*", "fif", fif);
+
+    // Run the UVM test
+    run_test("test");
+  end
+
+initial begin
+    fif.clk = 0;
+  end
+  
+  always #10 fif.clk = ~fif.clk;
+
+
+  initial begin
+    $dumpfile("dump.vcd");
+    $dumpvars;
+  end
+endmodule
